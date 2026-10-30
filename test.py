@@ -1,0 +1,11 @@
+from openai import OpenAI
+import os
+
+client = OpenAI(
+    api_key=os.environ["BASETEN_API_KEY"],
+    base_url="https://inference.baseten.co/v1",
+)
+
+# Print the models your key can use
+for m in client.models.list():
+    print(m.id)
