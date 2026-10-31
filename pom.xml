@@ -35,9 +35,10 @@
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
+        <!-- MySQL instead of H2 so you can see real SQL queries -->
         <dependency>
-            <groupId>com.h2database</groupId>
-            <artifactId>h2</artifactId>
+            <groupId>com.mysql</groupId>
+            <artifactId>mysql-connector-j</artifactId>
             <scope>runtime</scope>
         </dependency>
         <dependency>
@@ -51,7 +52,7 @@
             <version>${zxing.version}</version>
         </dependency>
 
-        <!-- Test (optional but useful for Step 7) -->
+        <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
