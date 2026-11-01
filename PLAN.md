@@ -1,6 +1,6 @@
 # UPI Payment Verification Gateway — Build Plan
 
-> Solo hackathon. Merchant creates Rs.100 order -> system assigns Rs.100.37 (unique paise 0.01-0.99 not used by any PENDING order) -> UPI link `upi://pay?pa=<merchantUpi>&am=<amount>&tn=<orderId>` + QR -> customer pays direct to merchant UPI (we never hold money) -> merchant pastes SMS / uploads screenshot -> Muse Spark Open-1026 via Baseten OpenAI-compatible API verifies -> match amount -> PENDING -> PAID if VERIFIED+credit. 10-min expiry. Web page: create + QR, verify, status. Footer: "Built with Muse Spark Open".
+> Solo hackathon. Merchant creates Rs.100 order -> system assigns Rs.100.37 (unique paise 0.01-0.99 not used by any PENDING order) -> UPI link `upi://pay?pa=<merchantUpi>&am=<amount>&tn=<orderId>` + QR -> customer pays direct to merchant UPI (we never hold money) -> merchant pastes SMS / uploads screenshot -> Muse Spark Open-1026 via Baseten OpenAI-compatible API verifies -> match amount -> PENDING -> PAID if VERIFIED+credit. 5-min expiry (if not paid within 5 mins order becomes EXPIRED/FAILED and user must retry - create new order). Web page: create + QR + countdown, verify, status with expired banner. Footer: "Built with Muse Spark Open".
 
 > Tech: Java 17, Spring Boot 3.x, Maven, Spring Web, Spring Data JPA, H2 file mode, Spring Validation. Model: `meta-models/muse-spark-open-1026` at `https://inference.baseten.co/v1`, key from env `BASETEN_API_KEY`. All money `BigDecimal` (precision 10, scale 2). No login, no React, no microservices.
 
@@ -23,7 +23,7 @@
   baseten.api.key=${BASETEN_API_KEY:}
   baseten.api.baseUrl=https://inference.baseten.co/v1
   baseten.api.model=meta-models/muse-spark-open-1026
-  app.expiry-minutes=10
+  app.expiry-minutes=5
   ```
 - `.gitignore` — `/data/`, `target/`, `.idea/`.
 
@@ -103,20 +103,23 @@ curl http://localhost:8080/orders/unknown-id/qr -i # 404
 
 ---
 
-## Step 5 — Expiry (10-min Reclaim)
+## Step 5 — Expiry (5-min Reclaim + Retry Prompt)
 
 **Files to create/change:**
-- `src/main/java/com/example/upigateway/service/ExpiryService.java` — `@Component @Scheduled(fixedRate=60_000)` queries `findByStatusAndCreatedAtBefore(PENDING, now.minus(expiryMinutes,MINUTES))`, set EXPIRED, save, log count.
+- `src/main/java/com/example/upigateway/service/ExpiryService.java` — `@Component @Scheduled(fixedRate=60_000)` queries `findByStatusAndCreatedAtBefore(PENDING, now.minus(expiryMinutes,MINUTES))`, set EXPIRED, save, log count. `expiryMinutes` from `app.expiry-minutes=5`.
+- `src/main/java/com/example/upigateway/service/PaymentService.java` (update guard) — if matched Order is EXPIRED (or not PENDING) then verify must FAIL: save Payment with verdict SUSPICIOUS reason `"Order expired — 5 min window passed. Please create a new order and pay again."`, do NOT set PAID, return 400/422 with expired flag.
+- `src/main/resources/static/index.html` + `app.js` — show countdown timer (5:00 → 0) from `createdAt + 5m`, on EXPIRED show red banner `"Payment failed — time expired. Please create a new order and try again."` + Retry button that pre-fills baseAmount/merchantUpiId.
 
-**What it does:** Frees paise: 100.37 PENDING >10m -> EXPIRED -> reusable.
+**What it does:** Strict 5-min payment window. Frees paise: 100.37 PENDING >5m -> EXPIRED -> reusable. Late SMS/screenshot verification is rejected as expired and user is asked to retry with a new order.
 
 **How to test:**
 ```bash
 # fast: set app.expiry-minutes=1, fixedRate=10_000, restart:
 mvn spring-boot:run &
 RESP=$(curl -s -X POST http://localhost:8080/orders -H "Content-Type: application/json" -d '{"baseAmount":"20.00","merchantUpiId":"test@upi"}')
-ID=$(echo $RESP|jq -r .id); sleep 70; curl -s http://localhost:8080/orders/$ID | jq .status # expect EXPIRED
-# restore 10 before next
+ID=$(echo $RESP|jq -r .id); AMT=$(echo $RESP|jq -r .uniqueAmount); sleep 70; curl -s http://localhost:8080/orders/$ID | jq .status # expect EXPIRED
+curl -s -X POST http://localhost:8080/payments/verify -H "Content-Type: application/json" -d "{\"smsText\":\"Rs.$AMT credited via UTR 123456789012 from buyer@upi\"}" | jq .reason # should mention expired
+# restore 5 before next
 ```
 
 ---
@@ -214,8 +217,8 @@ curl -s "http://localhost:8080/payments?orderId=$OID" | jq length
 ## Step 10 — Web Page (static HTML/JS)
 
 **Files to create/change:**
-- `src/main/resources/static/index.html` — Create form (baseAmount, merchantUpiId), result card (uniqueAmount, upiLink upi://, QR <img src=/orders/{id}/qr>), Verify SMS (textarea + button), Verify Image (file + button), result panel (verdict chip green/amber/grey, reason, fields), Order list (poll GET /orders 5s, badges), Payment history table (GET /payments). Footer Built with Muse Spark Open.
-- `src/main/resources/static/app.js` — fetch create->QR, verify JSON vs FormData, polls.
+- `src/main/resources/static/index.html` — Create form (baseAmount, merchantUpiId), result card (uniqueAmount, upiLink upi://, QR <img src=/orders/{id}/qr> + 5-min countdown timer), Verify SMS (textarea + button), Verify Image (file + button), result panel (verdict chip green/amber/grey, reason, fields), Order list (poll GET /orders 5s, badges PENDING/PAID/EXPIRED), Payment history table (GET /payments), Expired banner + Retry button. Footer Built with Muse Spark Open.
+- `src/main/resources/static/app.js` — fetch create->QR+start 5-min timer, verify JSON vs FormData, polls, handle EXPIRED response: show "Payment failed — time expired. Please create a new order and pay again."
 - `src/main/resources/static/style.css` — centered card.
 
 **What it does:** End-to-end demo loop.
