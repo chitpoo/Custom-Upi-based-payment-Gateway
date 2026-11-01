@@ -17,6 +17,8 @@ import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.util.List;
@@ -24,6 +26,8 @@ import java.util.List;
 @RestController
 @RequestMapping("/payments")
 public class PaymentController {
+
+    private static final Logger log = LoggerFactory.getLogger(PaymentController.class);
 
     private final PaymentService paymentService;
 
@@ -37,6 +41,7 @@ public class PaymentController {
         try {
             return paymentService.verifySms(request.smsText());
         } catch (DataIntegrityViolationException | OptimisticLockingFailureException e) {
+            log.warn("Verify-SMS race/constraint loss, saving fallback audit: {}", e.getMessage());
             return paymentService.saveRaceLossAudit(request.smsText());
         }
     }
@@ -47,6 +52,7 @@ public class PaymentController {
         try {
             return paymentService.verifyImage(image);
         } catch (DataIntegrityViolationException | OptimisticLockingFailureException e) {
+            log.warn("Verify-image race/constraint loss, saving fallback audit: {}", e.getMessage());
             try {
                 byte[] bytes = image.getBytes();
                 return paymentService.saveImageRaceLossAudit(bytes, image.getContentType(),

@@ -24,8 +24,8 @@ public class PaymentParser {
 
     private static final Logger log = LoggerFactory.getLogger(PaymentParser.class);
 
-    static final String SYSTEM_PROMPT = "You are UPI SMS parser. Extract amount (\"100.37\"), utr (12-digit), sender (UPI/name), time, direction credit/debit, verdict VERIFIED|SUSPICIOUS|NOT_A_PAYMENT with reason. Return JSON only with keys amount,utr,sender,time,direction,verdict,reason.";
-    static final String IMAGE_TEXT_PROMPT = "Extract amount (\"100.37\"), utr (12-digit), sender (UPI/name), time, direction credit/debit, verdict VERIFIED|SUSPICIOUS|NOT_A_PAYMENT with reason from this UPI payment screenshot. Return JSON only with keys amount,utr,sender,time,direction,verdict,reason.";
+    static final String SYSTEM_PROMPT = "You are UPI SMS parser. Extract amount as a decimal number, utr (exactly 12 digits), sender (UPI/name), time, direction credit/debit, verdict VERIFIED|SUSPICIOUS|NOT_A_PAYMENT with reason. Judge only the message content; there is no expected amount. Return JSON only with keys amount,utr,sender,time,direction,verdict,reason.";
+    static final String IMAGE_TEXT_PROMPT = "Extract amount as a decimal number, utr (exactly 12 digits), sender (UPI/name), time, direction credit/debit, verdict VERIFIED|SUSPICIOUS|NOT_A_PAYMENT with reason from this UPI payment screenshot. Judge only the image content; there is no expected amount. Return JSON only with keys amount,utr,sender,time,direction,verdict,reason.";
     static final String UNAVAILABLE_REASON = "Verification service unavailable";
 
     private final String apiKey;
@@ -35,9 +35,9 @@ public class PaymentParser {
     private final HttpClient httpClient;
 
     public PaymentParser(
-            @Value("${baseten.api.key:}") String apiKey,
-            @Value("${baseten.api.baseUrl:https://inference.baseten.co/v1}") String baseUrl,
-            @Value("${baseten.api.model:meta-models/muse-spark-open-1026}") String model,
+            @Value("${meta.api.key:}") String apiKey,
+            @Value("${meta.api.baseUrl:https://api.meta.ai/v1}") String baseUrl,
+            @Value("${meta.api.model:muse-spark-1.3}") String model,
             ObjectMapper objectMapper) {
         this.apiKey = apiKey;
         this.baseUrl = baseUrl;
@@ -106,7 +106,7 @@ public class PaymentParser {
                     .build();
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                log.warn("Baseten chat completions returned status {}", response.statusCode());
+                log.warn("Meta Model API chat completions returned status {}", response.statusCode());
                 return unavailable();
             }
             return parseContent(response.body());

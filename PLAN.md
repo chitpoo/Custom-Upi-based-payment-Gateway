@@ -1,8 +1,8 @@
 # UPI Payment Verification Gateway — Build Plan
 
-> Solo hackathon. Merchant creates Rs.100 order -> system assigns Rs.100.37 (unique paise 0.01-0.99 not used by any PENDING order) -> UPI link `upi://pay?pa=<merchantUpi>&am=<amount>&tn=<orderId>` + QR -> customer pays direct to merchant UPI (we never hold money) -> merchant pastes SMS / uploads screenshot -> Muse Spark Open-1026 via Baseten OpenAI-compatible API verifies -> match amount -> PENDING -> PAID if VERIFIED+credit. 5-min expiry (if not paid within 5 mins order becomes EXPIRED/FAILED and user must retry - create new order). Web page: create + QR + countdown, verify, status with expired banner. Footer: "Built with Muse Spark Open".
+> Solo hackathon. Merchant creates Rs.100 order -> system assigns Rs.100.37 (unique paise 0.01-0.99 not used by any PENDING order) -> UPI link `upi://pay?pa=<merchantUpi>&am=<amount>&tn=<orderId>` + QR -> customer pays direct to merchant UPI (we never hold money) -> merchant pastes SMS / uploads screenshot -> Muse Spark Open-1026 via Baseten OpenAI-compatible API verifies -> match amount -> PENDING -> PAID if VERIFIED+credit. 5-min expiry (if not paid within 5 mins order becomes EXPIRED/FAILED and user must retry - create new order). Web page: create + QR + countdown, verify, status with expired banner. Footer: "Built with Muse Spark".
 
-> Tech: Java 17, Spring Boot 3.x, Maven, Spring Web, Spring Data JPA, MySQL 8 (local install, `docker-compose.yml` as alternative), Spring Validation. Model: `meta-models/muse-spark-open-1026` at `https://inference.baseten.co/v1`, key from env `BASETEN_API_KEY`. All money `BigDecimal` (precision 10, scale 2). No login, no React, no microservices.
+> Tech: Java 17, Spring Boot 3.x, Maven, Spring Web, Spring Data JPA, MySQL 8 (local install, `docker-compose.yml` as alternative), Spring Validation. Model: `muse-spark-1.3` on Meta Model API at `https://api.meta.ai/v1`, key from env `META_API_KEY`. All money `BigDecimal` (precision 10, scale 2). No login, no React, no microservices.
 
 > Commands use `mvn` (there is no Maven wrapper in this repo; if you add one, swap `mvn` for `./mvnw`). Each step has a checkbox: mark `[x]` only after you confirm its test passed.
 >
@@ -27,9 +27,9 @@
   spring.jpa.properties.hibernate.format_sql=true
   logging.level.org.hibernate.SQL=DEBUG
   logging.level.org.hibernate.type.descriptor.sql.BasicBinder=TRACE
-  baseten.api.key=${BASETEN_API_KEY:}
-  baseten.api.baseUrl=https://inference.baseten.co/v1
-  baseten.api.model=meta-models/muse-spark-open-1026
+  meta.api.key=${META_API_KEY:}
+  meta.api.baseUrl=https://api.meta.ai/v1
+  meta.api.model=muse-spark-1.3
   app.expiry-minutes=5
   spring.servlet.multipart.max-file-size=5MB
   spring.servlet.multipart.max-request-size=5MB
@@ -135,20 +135,20 @@ ID=$(echo $RESP|jq -r .id); sleep 75; curl -s http://localhost:8080/orders/$ID |
 
 ---
 
-## Step 6 — AI Parser (Muse Spark Open-1026, Text) + Debug Endpoint [x] (endpoint + failure path live, parse logic offline 17/17; live VERIFIED needs working key)
+## Step 6 — AI Parser (Muse Spark 1.3, Text) + Debug Endpoint [x] (live-verified Nov 1: VERIFIED parse + OTP→NOT_A_PAYMENT on Meta Model API)
 
 **Files to create/change:**
 - `src/main/java/com/example/upigateway/model/ParsedResult.java` — amount(BigDecimal), utr, sender, timeText, direction, verdict, reason, rawJson.
-- `src/main/java/com/example/upigateway/service/PaymentParser.java` — `@Service` reads `BASETEN_API_KEY`/baseUrl/model from props, uses HttpClient (connect + request timeout ~30s) + Jackson, method `ParsedResult parseSms(String smsText)` builds OpenAI-compatible `{model:"meta-models/muse-spark-open-1026",temperature:0,response_format:{type:"json_object"},messages:[{role:"system",content:"You are UPI SMS parser. Extract amount (\"100.37\"), utr (12-digit), sender (UPI/name), time, direction credit/debit, verdict VERIFIED|SUSPICIOUS|NOT_A_PAYMENT with reason. Return JSON only with keys amount,utr,sender,time,direction,verdict,reason."},{role:"user",content:smsText}]}` POST to `https://inference.baseten.co/v1/chat/completions` with Bearer key. Parse only `message.content`: strip ``` fences, accept amount as string-or-number, UTR must match `\d{12}` else null. On IOException/non-2xx/missing key -> return SUSPICIOUS "Verification service unavailable". Never log the key.
+- `src/main/java/com/example/upigateway/service/PaymentParser.java` — `@Service` reads `META_API_KEY`/baseUrl/model from props, uses HttpClient (connect + request timeout ~30s) + Jackson, method `ParsedResult parseSms(String smsText)` builds OpenAI-compatible `{model:"muse-spark-1.3",temperature:0,response_format:{type:"json_object"},messages:[{role:"system",content:"You are UPI SMS parser. Extract amount as a decimal number, utr (exactly 12 digits), sender (UPI/name), time, direction credit/debit, verdict VERIFIED|SUSPICIOUS|NOT_A_PAYMENT with reason. Judge only the message content; there is no expected amount. Return JSON only with keys amount,utr,sender,time,direction,verdict,reason." (No example amount in the prompt — the model once treated "100.37" as ground truth.)},{role:"user",content:smsText}]}` POST to `https://api.meta.ai/v1/chat/completions` with Bearer key. Parse only `message.content`: strip ``` fences, accept amount as string-or-number, UTR must match `\d{12}` else null. On IOException/non-2xx/missing key -> return SUSPICIOUS "Verification service unavailable". Never log the key.
 - `src/main/java/com/example/upigateway/controller/DebugController.java` — `POST /debug/parse` takes `{smsText}` -> `ParsedResult` (dev only).
 
 **What it does:** Isolates AI; strictly reads message.content; handles outages.
 
-**Prerequisite (do first):** `export BASETEN_API_KEY=<your-key>; python3 test.py` must list `meta-models/muse-spark-open-1026`. (On Nov 1 the session key returned 401 `Authentication required` — confirm YOUR key works before building.) If the model rejects `response_format`, drop that field — the fence-stripping parser covers plain output.
+**Prerequisite (done Nov 1):** `export META_API_KEY=<your-key>; python3 test.py` lists `muse-spark-1.3`. Key verified working on Meta Model API (models + text + vision probes all passed). `response_format: json_object` is supported — keep it.
 
 **How to test:**
 ```bash
-export BASETEN_API_KEY=<your-key>
+export META_API_KEY=<your-key>
 mvn spring-boot:run &
 curl -X POST http://localhost:8080/debug/parse -H "Content-Type: application/json" -d '{"smsText":"Rs.100.37 credited to A/c XX1234 on 30-10-24 14:32 via UTR 123456789012 from RAHUL@okaxis"}' | jq
 # expect VERIFIED + 100.37
@@ -157,7 +157,7 @@ curl -X POST http://localhost:8080/debug/parse -H "Content-Type: application/jso
 
 ---
 
-## Step 7 — Verify + Match (POST /payments/verify, @Transactional Audit) [x] (201 + audit live; PAID/duplicate/expired-match need working key)
+## Step 7 — Verify + Match (POST /payments/verify, @Transactional Audit) [x] (live-verified Nov 1: PAID match, Duplicate UTR, expired rejection)
 
 **Files to create/change:**
 - `src/main/java/com/example/upigateway/dto/VerifySmsRequest.java` — `{ @NotBlank String smsText }`.
@@ -165,9 +165,9 @@ curl -X POST http://localhost:8080/debug/parse -H "Content-Type: application/jso
 - `src/main/java/com/example/upigateway/service/PaymentService.java` — `@Service` core `@Transactional public VerifyPaymentResponse verifySms(String smsText)` delegating to private `matchAndSettle(ParsedResult parsed, String rawMessage)` (shared with Step 8):
   1. parsed = paymentParser.parseSms(smsText); normalize UTR `""`->null, amount `setScale(2,HALF_UP)` (match side; create side in Step 3 already stores scale 2).
   2. Create Payment always: id=UUID, amount, utr, sender, verdict, reason, rawMessage, receivedAt=now, order=null.
-  3. If verdict!=VERIFIED or amount==null or direction!=credit -> save audit, return (201, matchedOrderId null).
+  3. If verdict!=VERIFIED or amount==null or (SMS and direction!=credit) -> save audit, return (201, matchedOrderId null). The credit gate applies to SMS only — screenshots skip it (a payer's success screen shows a debit).
   4. Else lookup PENDING orders by amount (earliest first). If none -> second lookup for EXPIRED by amount: if found, set verdict SUSPICIOUS, reason `"Order expired — 5 min window passed. Please create a new order and pay again."`, link the expired order, save, return with orderStatus EXPIRED (UI shows banner + Retry). If neither -> save audit (order null), return.
-  5. If utr!=null && existsByUtr(utr) -> SUSPICIOUS "Duplicate UTR", save audit, return.
+  5. If utr!=null && existsByUtr(utr) -> SUSPICIOUS "Duplicate UTR", save audit with UTR nulled (UNIQUE would reject the duplicate value; response still carries the parsed UTR), return. Same nulling guard in the EXPIRED branch for re-submits.
   6. Else order.setStatus(PAID); order.setPaidAt(now); payment.setOrder(order); save both in ONE @Transactional. Race Safety: catch `DataIntegrityViolationException`/`OptimisticLockingFailureException` OUTSIDE the tx boundary and re-save the losing attempt as a new SUSPICIOUS audit ("Payment already processed") in a fresh tx, so "every Payment saved" still holds.
 - `src/main/java/com/example/upigateway/controller/PaymentController.java` — `@PostMapping("/payments/verify")` takes `@Valid VerifySmsRequest` -> always 201 with `VerifyPaymentResponse` (no 422; callers branch on `verdict`/`orderStatus`).
 - `src/main/java/com/example/upigateway/config/GlobalExceptionHandler.java` — map `@Valid` failures -> 400 shape, missing resources -> 404 shape, exhaustion/races -> 409 shape.
@@ -194,9 +194,9 @@ curl -s -X POST http://localhost:8080/payments/verify -H "Content-Type: applicat
 
 ---
 
-## Step 8 — Screenshot Verification (Image to Muse) [x] (400 validation + 201 audit live; vision extraction needs working key)
+## Step 8 — Screenshot Verification (Image to Muse) [x] (live-verified Nov 1: screenshot → VERIFIED + PAID)
 
-**Pre-check FIRST (spike, before writing code):** send one real `image_url` vision call to `meta-models/muse-spark-open-1026` via the Baseten endpoint. If the model is not vision-capable, STOP and replan this step (fallback: text-only verification + manual amount/UTR entry) — do not build the endpoint blind. (Still unverified as of Nov 1 — the spike was blocked by the 401. Do not skip.)
+**Pre-check (done Nov 1):** a real `image_url` vision call to `muse-spark-1.3` on Meta Model API succeeded — the model accepts and answers image inputs. (If vision ever fails on a future model, fallback: text-only verification + manual amount/UTR entry.)
 
 **Files to create/change:**
 - `PaymentParser` add `parseImage(byte[] bytes, String contentType)` — vision message [{type:"text",text:"Extract..."}, {type:"image_url",image_url:{url:"data:<type>;base64,<b64>"}}] same model, same failure->SUSPICIOUS.
@@ -237,7 +237,7 @@ curl -s "http://localhost:8080/payments?orderId=$OID" | jq length
 ## Step 10 — Web Page (static HTML/JS) [x] (served live: index/app.js/footer; click-through in a real browser still yours to try)
 
 **Files to create/change:**
-- `src/main/resources/static/index.html` — Create form (baseAmount, merchantUpiId), result card (uniqueAmount, copyable upiLink `upi://` + copy button for desktop, QR `<img src=/orders/{id}/qr>` + 5-min countdown timer), Verify SMS (textarea + button), Verify Image (file + button), result panel (verdict chip green/amber/grey, reason, fields), Order list (poll `GET /orders` 5s, badges PENDING/PAID/EXPIRED), Payment history table (`GET /payments`), Expired banner + Retry button (pre-fills baseAmount/merchantUpiId). Footer Built with Muse Spark Open.
+- `src/main/resources/static/index.html` — Create form (baseAmount, merchantUpiId), result card (uniqueAmount, copyable upiLink `upi://` + copy button for desktop, QR `<img src=/orders/{id}/qr>` + 5-min countdown timer), Verify SMS (textarea + button), Verify Image (file + button), result panel (verdict chip green/amber/grey, reason, fields), Order list (poll `GET /orders` 5s, badges PENDING/PAID/EXPIRED), Payment history table (`GET /payments`), Expired banner + Retry button (pre-fills baseAmount/merchantUpiId). Footer Built with Muse Spark.
 - `src/main/resources/static/app.js` — fetch create->QR+start 5-min timer from `createdAt + 5m`, verify JSON vs FormData, polls. Countdown is display-only: ALWAYS poll `GET /orders/{id}` for the true status (server expiry runs every ~60s, so EXPIRED can lag the timer). On `orderStatus==EXPIRED` show `"Payment failed — time expired. Please create a new order and pay again."` + Retry.
 - `src/main/resources/static/style.css` — centered card.
 
@@ -251,7 +251,7 @@ mvn spring-boot:run
 # 2) Paste correct-amount SMS -> VERIFIED PAID
 # 3) Paste OTP -> NOT_A_PAYMENT, history +1
 # 4) Upload JPG -> VERIFIED via vision
-curl -s http://localhost:8080/ | grep -i "Muse Spark Open"
+curl -s http://localhost:8080/ | grep -i "Built with Muse Spark"
 ```
 
 ---

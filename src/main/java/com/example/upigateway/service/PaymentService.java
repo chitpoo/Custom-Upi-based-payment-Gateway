@@ -44,7 +44,7 @@ public class PaymentService {
     @Transactional
     public VerifyPaymentResponse verifySms(String smsText) {
         ParsedResult parsed = paymentParser.parseSms(smsText);
-        return matchAndSettle(parsed, smsText);
+        return matchAndSettle(parsed, smsText, true);
     }
 
     @Transactional
@@ -69,7 +69,7 @@ public class PaymentService {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Could not read uploaded image");
         }
         ParsedResult parsed = paymentParser.parseImage(bytes, contentType);
-        return matchAndSettle(parsed, imageDescriptor(image.getOriginalFilename(), contentType, bytes.length));
+        return matchAndSettle(parsed, imageDescriptor(image.getOriginalFilename(), contentType, bytes.length), false);
     }
 
     @Transactional(readOnly = true)
@@ -98,7 +98,9 @@ public class PaymentService {
                 order == null ? null : order.getStatus());
     }
 
-    private VerifyPaymentResponse matchAndSettle(ParsedResult parsed, String rawMessage) {
+    // requireCredit is true for bank SMS (money must arrive at the merchant) and false for
+    // screenshots (a payer's success screen legitimately shows a debit/outgoing payment).
+    private VerifyPaymentResponse matchAndSettle(ParsedResult parsed, String rawMessage, boolean requireCredit) {
         String utr = parsed.utr();
         if (utr != null && utr.isBlank()) {
             utr = null;
@@ -117,7 +119,7 @@ public class PaymentService {
         payment.setReceivedAt(Instant.now());
 
         boolean credit = "credit".equalsIgnoreCase(parsed.direction() == null ? "" : parsed.direction().trim());
-        if (verdict != Verdict.VERIFIED || amount == null || !credit) {
+        if (verdict != Verdict.VERIFIED || amount == null || (requireCredit && !credit)) {
             paymentRepository.save(payment);
             return new VerifyPaymentResponse(payment.getId(), payment.getVerdict(), payment.getReason(),
                     amount, utr, null, null);
@@ -130,6 +132,9 @@ public class PaymentService {
                 Order exp = expired.get(0);
                 payment.setVerdict(Verdict.SUSPICIOUS);
                 payment.setReason(EXPIRED_REASON);
+                if (utr != null && paymentRepository.existsByUtr(utr)) {
+                    payment.setUtr(null); // UNIQUE(utr): keep the expired audit saveable on re-submits
+                }
                 payment.setOrder(exp);
                 paymentRepository.save(payment);
                 return new VerifyPaymentResponse(payment.getId(), Verdict.SUSPICIOUS, EXPIRED_REASON,
@@ -143,6 +148,7 @@ public class PaymentService {
         if (utr != null && paymentRepository.existsByUtr(utr)) {
             payment.setVerdict(Verdict.SUSPICIOUS);
             payment.setReason(DUPLICATE_UTR_REASON);
+            payment.setUtr(null); // UNIQUE(utr): the audit row must not reuse the duplicate value
             paymentRepository.save(payment);
             return new VerifyPaymentResponse(payment.getId(), Verdict.SUSPICIOUS, DUPLICATE_UTR_REASON,
                     amount, utr, null, null);

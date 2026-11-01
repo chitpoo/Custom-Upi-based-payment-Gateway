@@ -2,8 +2,8 @@ from openai import OpenAI
 import os
 
 client = OpenAI(
-    api_key=os.environ["BASETEN_API_KEY"],
-    base_url="https://inference.baseten.co/v1",
+    api_key=os.environ["META_API_KEY"],
+    base_url="https://api.meta.ai/v1",
 )
 
 # Print the models your key can use

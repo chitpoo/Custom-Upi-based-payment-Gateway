@@ -1,7 +1,7 @@
 # Project rules
 - Java 17, Spring Boot 3.x, Maven. Package: com.example.upigateway
 - All money is BigDecimal (scale 2). Never use double/float for money.
-- AI model is exactly meta-models/muse-spark-open-1026 (key from env BASETEN_API_KEY). Never hardcode or log the key.
+- AI model is exactly muse-spark-1.3 on Meta Model API https://api.meta.ai/v1 (key from env META_API_KEY). Never hardcode or log the key.
 - Only change files needed for the current step. Don't refactor unrelated code.
 - Don't add new dependencies unless PLAN.md says so.
 - No login, no React, no microservices.
