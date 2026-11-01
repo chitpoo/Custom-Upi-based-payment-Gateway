@@ -36,6 +36,7 @@ Payment {
     @Enumerated(EnumType.STRING)
     private Verdict verdict;
 
+    @Column(length = 1000)
     private String reason;
 
     @Column(length = 4000)

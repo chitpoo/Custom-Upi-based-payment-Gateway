@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>UPI Payment Verification Gateway</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <main class="container">
+    <h1>UPI Payment Verification Gateway</h1>
+
+    <section class="card" id="createCard">
+      <h2>Create Order</h2>
+      <form id="createForm">
+        <label>Base amount (Rs)
+          <input type="number" id="baseAmount" name="baseAmount" min="0.01" step="0.01" value="100.00" required>
+        </label>
+        <label>Merchant UPI ID
+          <input type="text" id="merchantUpiId" name="merchantUpiId" value="shop@okaxis" required>
+        </label>
+        <button type="submit">Create Order</button>
+      </form>
+      <p class="error" id="createError" hidden></p>
+    </section>
+
+    <section class="card" id="resultCard" hidden>
+      <h2>Pay <span id="uniqueAmount"></span></h2>
+      <p class="status-line">Order <code id="orderId"></code>
+        <span class="badge" id="orderStatusBadge"></span>
+        <span id="countdown" class="countdown"></span>
+      </p>
+      <p class="upi-row">
+        <code id="upiLink"></code>
+        <button type="button" id="copyLinkBtn">Copy</button>
+        <a id="upiAnchor" href="#">Open UPI app</a>
+      </p>
+      <img id="qrImg" alt="UPI QR code" width="220" height="220">
+      <div class="expired-banner" id="expiredBanner" hidden>
+        <p>Payment failed — time expired. Please create a new order and pay again.</p>
+        <button type="button" id="retryBtn">Retry</button>
+      </div>
+    </section>
+
+    <section class="card" id="verifySmsCard">
+      <h2>Verify SMS</h2>
+      <form id="verifySmsForm">
+        <label>Bank SMS text
+          <textarea id="smsText" rows="3" placeholder="Rs.100.37 credited ... UTR 123456789012 ..." required></textarea>
+        </label>
+        <button type="submit">Verify SMS</button>
+      </form>
+    </section>
+
+    <section class="card" id="verifyImageCard">
+      <h2>Verify Screenshot</h2>
+      <form id="verifyImageForm">
+        <label>Payment screenshot (JPG/PNG, max 5MB)
+          <input type="file" id="imageFile" name="image" accept="image/jpeg,image/png" required>
+        </label>
+        <button type="submit">Verify Image</button>
+      </form>
+    </section>
+
+    <section class="card" id="verdictCard" hidden>
+      <h2>Verification Result</h2>
+      <p><span class="chip" id="verdictChip"></span></p>
+      <p id="verdictReason"></p>
+      <dl class="fields">
+        <div><dt>Amount</dt><dd id="vAmount">-</dd></div>
+        <div><dt>UTR</dt><dd id="vUtr">-</dd></div>
+        <div><dt>Matched order</dt><dd id="vOrder">-</dd></div>
+        <div><dt>Order status</dt><dd id="vOrderStatus">-</dd></div>
+      </dl>
+    </section>
+
+    <section class="card">
+      <h2>Orders</h2>
+      <table id="orderTable">
+        <thead><tr><th>ID</th><th>Unique amount</th><th>Merchant</th><th>Status</th><th>Created</th></tr></thead>
+        <tbody id="orderBody"><tr><td colspan="5">Loading…</td></tr></tbody>
+      </table>
+    </section>
+
+    <section class="card">
+      <h2>Payment History</h2>
+      <table id="paymentTable">
+        <thead><tr><th>Payment</th><th>Verdict</th><th>Amount</th><th>UTR</th><th>Order</th><th>Reason</th></tr></thead>
+        <tbody id="paymentBody"><tr><td colspan="6">Loading…</td></tr></tbody>
+      </table>
+    </section>
+
+    <footer>Built with Muse Spark Open</footer>
+  </main>
+  <script src="/app.js"></script>
+</body>
+</html>

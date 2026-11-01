@@ -4,7 +4,7 @@ services:
     container_name: upi-mysql
     environment:
       MYSQL_ROOT_PASSWORD: root
-      MYSQL_DATABASE: upidb
+      MYSQL_DATABASE: paymentgateway
     ports:
       - "3306:3306"
     volumes:
