@@ -12,7 +12,7 @@
 - `pom.xml` — parent `spring-boot-starter-parent` 3.2.x (Java 17). Dependencies: `spring-boot-starter-web`, `spring-boot-starter-data-jpa`, `spring-boot-starter-validation`, `com.h2database:h2`, `com.google.zxing:core` + `javase` 0.7.x (for Step 4). Build: `spring-boot-maven-plugin`.
 - `src/main/java/com/example/upigateway/UpiGatewayApplication.java` — `@SpringBootApplication` + `@EnableScheduling`.
 - `src/main/resources/application.properties`:
-  ```
+  ```√√√
   server.port=8080
   spring.datasource.url=jdbc:h2:file:./data/upidb
   spring.datasource.driverClassName=org.h2.Driver

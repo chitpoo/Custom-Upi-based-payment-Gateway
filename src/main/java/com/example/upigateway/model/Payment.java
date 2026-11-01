@@ -15,7 +15,8 @@ import java.time.Instant;
 
 @Entity
 @Table(name = "payments")
-public class Payment {
+public class
+Payment {
 
     @Id
     private String id;
