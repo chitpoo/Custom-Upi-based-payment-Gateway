@@ -5,7 +5,7 @@
 - Only change files needed for the current step. Don't refactor unrelated code.
 - Don't add new dependencies unless PLAN.md says so.
 - No login, no React, no microservices.
-- After code changes, run `./mvnw -q compile` and fix errors before finishing.
+- After code changes, run `mvn -q compile` and fix errors before finishing.
 # Learning mode (I'm a beginner, this is my first solo project)
 - Before editing, explain in 2–3 simple sentences what you'll change and why.
 - After each step, give a short summary: which files changed, what each new

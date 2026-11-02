@@ -3,7 +3,9 @@
 This project uses MySQL so you can see real SQL queries. DB name is `paymentgateway`
 (adjust `application.properties` if your local user/password differ from root/9599).
 
-## 1. Option A — local MySQL (used for development)
+## 1. Start MySQL (pick A or B)
+
+### Option A — local MySQL (used for development)
 
 Make sure your local MySQL 8 server is running on port 3306. The app URL has
 `createDatabaseIfNotExist=true`, so the `paymentgateway` database is created
@@ -13,7 +15,7 @@ automatically on first run.
 mysql -uroot -p -e "SELECT 1;"  # enter your password, expect 1
 ```
 
-## 1. Option B — MySQL with Docker
+### Option B — MySQL with Docker (uses password 9599, matching the app)
 
 Install Docker Desktop from https://www.docker.com/products/docker-desktop/
 Then run:
@@ -35,8 +37,10 @@ mysql -uroot -p -e "SHOW DATABASES; USE paymentgateway; SHOW TABLES;"
 
 Or use MySQL Workbench: host=localhost port=3306 user=root db=paymentgateway
 
-## 3. Run the app
+## 3. Export the AI key and run the app
 ```bash
+export META_API_KEY=<your-key>  # required for SMS/screenshot verification
+python3 test.py                 # should list muse-spark-1.3
 mvn spring-boot:run
 ```
 

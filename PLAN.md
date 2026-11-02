@@ -1,6 +1,6 @@
 # UPI Payment Verification Gateway — Build Plan
 
-> Solo hackathon. Merchant creates Rs.100 order -> system assigns Rs.100.37 (unique paise 0.01-0.99 not used by any PENDING order) -> UPI link `upi://pay?pa=<merchantUpi>&am=<amount>&tn=<orderId>` + QR -> customer pays direct to merchant UPI (we never hold money) -> merchant pastes SMS / uploads screenshot -> Muse Spark Open-1026 via Baseten OpenAI-compatible API verifies -> match amount -> PENDING -> PAID if VERIFIED+credit. 5-min expiry (if not paid within 5 mins order becomes EXPIRED/FAILED and user must retry - create new order). Web page: create + QR + countdown, verify, status with expired banner. Footer: "Built with Muse Spark".
+> Solo hackathon. Merchant creates Rs.100 order -> system assigns Rs.100.37 (unique paise 0.01-0.99 not used by any PENDING order) -> UPI link `upi://pay?pa=<merchantUpi>&am=<amount>&tn=<orderId>` + QR -> customer pays direct to merchant UPI (we never hold money) -> merchant pastes SMS / uploads screenshot -> Muse Spark 1.3 via Meta Model API verifies -> match amount -> PENDING -> PAID if VERIFIED+credit. 5-min expiry (if not paid within 5 mins order becomes EXPIRED/FAILED and user must retry - create new order). Web page: create + QR + countdown, verify, status with expired banner. Footer: "Built with Muse Spark".
 
 > Tech: Java 17, Spring Boot 3.x, Maven, Spring Web, Spring Data JPA, MySQL 8 (local install, `docker-compose.yml` as alternative), Spring Validation. Model: `muse-spark-1.3` on Meta Model API at `https://api.meta.ai/v1`, key from env `META_API_KEY`. All money `BigDecimal` (precision 10, scale 2). No login, no React, no microservices.
 
@@ -47,7 +47,6 @@ mvn spring-boot:run
 curl http://localhost:8080/ # 404 Whitelabel = Tomcat up
 mysql -uroot -p paymentgateway -e "SHOW TABLES;" # enter your MySQL password
 ```
-com
 ---
 
 ## Step 2 — Entities + Repositories [x]
@@ -210,7 +209,7 @@ curl -s -X POST http://localhost:8080/payments/verify -H "Content-Type: applicat
 curl -s -X POST http://localhost:8080/payments/verify-image -F "image=@/tmp/pay.jpg" | jq
 # expect amount+utr if payment, NOT_A_PAYMENT if not
 curl -s -X POST http://localhost:8080/payments/verify-image -F "image=@/tmp/selfie.jpg" | jq .verdict # NOT_A_PAYMENT
-curl -s http://localhost:8080/payments | jq length # audited
+# payments are audited — list them via Step 9 GET /payments
 ```
 
 ---

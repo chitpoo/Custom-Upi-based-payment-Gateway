@@ -90,6 +90,15 @@ public class PaymentService {
                 + ":" + contentType + ":" + size + "B";
     }
 
+    // Column caps (Payment.reason 1000, Payment.rawMessage 4000): truncate user/AI text
+    // instead of letting an over-long value fail the audit save.
+    static String truncate(String text, int maxLength) {
+        if (text == null || text.length() <= maxLength) {
+            return text;
+        }
+        return text.substring(0, maxLength);
+    }
+
     private VerifyPaymentResponse toResponse(Payment payment) {
         Order order = payment.getOrder();
         return new VerifyPaymentResponse(payment.getId(), payment.getVerdict(), payment.getReason(),
@@ -114,8 +123,8 @@ public class PaymentService {
         payment.setUtr(utr);
         payment.setSender(parsed.sender());
         payment.setVerdict(verdict);
-        payment.setReason(parsed.reason());
-        payment.setRawMessage(rawMessage);
+        payment.setReason(truncate(parsed.reason(), 1000));
+        payment.setRawMessage(truncate(rawMessage, 4000));
         payment.setReceivedAt(Instant.now());
 
         boolean credit = "credit".equalsIgnoreCase(parsed.direction() == null ? "" : parsed.direction().trim());
@@ -190,7 +199,7 @@ public class PaymentService {
         payment.setSender(parsed.sender());
         payment.setVerdict(Verdict.SUSPICIOUS);
         payment.setReason(RACE_LOSS_REASON);
-        payment.setRawMessage(rawMessage);
+        payment.setRawMessage(truncate(rawMessage, 4000));
         payment.setReceivedAt(Instant.now());
         paymentRepository.save(payment);
         return new VerifyPaymentResponse(payment.getId(), Verdict.SUSPICIOUS, RACE_LOSS_REASON,
