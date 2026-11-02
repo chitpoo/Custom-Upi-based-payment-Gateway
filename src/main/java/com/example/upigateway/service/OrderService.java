@@ -17,7 +17,7 @@ import java.util.UUID;
 import java.util.concurrent.ThreadLocalRandom;
 
 @Service
-public class OrderService {
+public class  OrderService {
 
     private final OrderRepository orderRepository;
 

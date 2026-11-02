@@ -35,34 +35,107 @@ SMS / uploads a screenshot → Muse Spark verifies → amount match flips the or
    `src/main/resources/application.properties`
    (`spring.datasource.username` / `spring.datasource.password`).
 
-3. Export your API key (required for SMS/screenshot verification):
+3. Get the API key value (provided with our submission — never committed to
+   git) and sanity-check it:
 
    ```bash
-   export META_API_KEY=<your-key>
+   META_API_KEY=<key-from-us> python3 test.py   # should list muse-spark-1.3
    ```
-
-   Sanity-check the key first: `python3 test.py` should list `muse-spark-1.3`.
 
 ## Run
 
 ```bash
-mvn compile            # must pass with no errors
-mvn spring-boot:run    # app on http://localhost:8080
+mvn compile                                            # must pass with no errors
+META_API_KEY=<key-from-us> mvn spring-boot:run        # app on http://localhost:8080
+# + WEBHOOK_SECRET=<secret> prefix only if you use the Android macro
 ```
 
 Open http://localhost:8080 for the demo UI
 (`curl http://localhost:8080/ | grep -i "Built with Muse Spark"`).
 
+One server serves everything: the UI and the API share port 8080 — no
+separate frontend process, no CORS setup, one command to run.
+
 Fast-expiry run (for testing the 5-minute window without waiting):
 
 ```bash
-mvn spring-boot:run -Dspring-boot.run.arguments="--app.expiry-minutes=1 --app.expiry-interval-ms=10000"
+META_API_KEY=<key-from-us> mvn spring-boot:run -Dspring-boot.run.arguments="--app.expiry-minutes=1 --app.expiry-interval-ms=10000"
 ```
 
 ## Demo script (5 minutes)
 
-Terminal 1: `export META_API_KEY=<key>` then `mvn spring-boot:run`.
-Terminal 2 (and a browser on http://localhost:8080):
+### Judge demo — browser only (recommended)
+
+You (the presenter) run Terminal 1 beforehand:
+`META_API_KEY=<key-from-us> mvn spring-boot:run`.
+Judges only touch http://localhost:8080 (no phone or macro setup needed —
+paste/upload covers them):
+
+1. **Create** — the form is prefilled (`100.00`, `shop@okaxis`); click Create
+   Order. The result card shows the unique amount (e.g. `100.37`), the `upi://`
+   link + Copy button, the QR code, status `PENDING`, and a 5:00 countdown.
+2. **Pay** — scan the QR with any UPI app and pay the EXACT unique amount
+   (or simulate — see below).
+3. **Verify SMS** — paste the bank SMS into Verify SMS → Verify SMS. Green
+   `VERIFIED` chip + amount/UTR/matched order; the order badge flips to `PAID`;
+   both tables refresh within 5 s.
+4. **Screenshot instead** — upload a payment screenshot (JPG/PNG ≤ 5 MB) for
+   the same verdict panel.
+5. **Expiry** — after 5 unpaid minutes the red *"Payment failed — time
+   expired…"* banner appears with a Retry button that pre-fills the form.
+
+### Auto SMS from Android (recommended for the video)
+
+Your phone can push each SMS straight to the app — no pasting:
+
+1. **Same network:** connect the phone to the same network as this laptop,
+   then find the laptop's IP on that network — Mac: `ipconfig getifaddr en0`,
+   Windows: `ipconfig`, Linux: `hostname -I`. Use YOUR OWN IP in step 4
+   below, and re-check it if things ever stop working (IPs change).
+2. **Install MacroDroid** (Play Store, free) and grant it SMS access when asked.
+3. **Battery:** Android Settings → Apps → MacroDroid → Battery → Unrestricted,
+   so Android can't kill it mid-demo.
+4. **Create the macro:** Add Macro → Trigger `SMS Received` (any sender) →
+   Action `HTTP Request`: URL
+   `http://<laptop-ip>:8080/payments/sms-webhook` (your IP from step 1),
+   method `POST`,
+   content type `application/json`, body
+   `{"from":"<SMS-number magic text>","text":"<SMS-message magic text>"}`
+   (insert both via the magic-text button). No constraints needed.
+5. **macOS firewall:** on the first phone attempt the laptop may ask to allow
+   incoming connections for Java — click Allow.
+6. **Test:** text yourself any message → a new row appears in Payment History
+   (non-payments land as `NOT_A_PAYMENT`/`SUSPICIOUS`, never matched). Then
+   make the real payment and watch the order flip to `PAID` untouched.
+7. **Optional security:** to stop strangers on the network hitting your
+   webhook, pick ANY value you like and put the SAME value in both places:
+   prefix the run command with `WEBHOOK_SECRET=<your-value>` and add a header
+   `X-Webhook-Secret: <your-value>` in MacroDroid's HTTP Request headers.
+   The two just have to match each other — not anyone else's. Leave the env
+   var unset and the endpoint is open (fine for judging, where no macro is
+   used at all). The server never fails on malformed JSON: raw quotes, newlines, and
+   backslashes in the SMS are handled, and even a plain-text body is treated
+   as the SMS.
+
+### Manual fallback (no phone setup)
+
+- **Paste:** read the bank SMS on your phone, copy/type its text into the
+  Verify SMS box, submit. That text goes straight to the AI parser, and the
+  result is saved to the `payments` table.
+- **Same-network browser:** open `http://<laptop-ip>:8080` in the phone's
+  browser and paste the SMS directly — no retyping.
+- **Screenshot:** screenshot the payment → transfer it to the laptop (AirDrop,
+  message-to-self, USB) → upload it in Verify Screenshot.
+- **Simulated SMS (no real payment):** paste
+  `Rs.<uniqueAmount> credited to A/c XX1234 via UTR <random-12-digit> from buyer@okaxis`
+  using the EXACT amount shown on screen and a fresh random-looking UTR each
+  run. Avoid obviously fake UTRs (`123456789012`, `777788889999`, …) — the
+  model flags sequential/repetitive patterns as fabricated.
+
+### Terminal demo — curl (same flow, for API checking)
+
+Terminal 1: `META_API_KEY=<key-from-us> mvn spring-boot:run`.
+Terminal 2:
 
 ```bash
 # 1. Create an order — note the uniqueAmount, e.g. 100.37
@@ -113,12 +186,13 @@ create form.
 | `GET /orders/{id}/qr` | — | `200` `image/png` (220×220), `404` unknown |
 | `POST /payments/verify` | `{"smsText":"…"}` | always `201` `VerifyPaymentResponse` — branch on `verdict` / `orderStatus`, never on status code |
 | `POST /payments/verify-image` | multipart `image` (JPEG/PNG ≤ 5 MB) | always `201` `VerifyPaymentResponse` |
+| `POST /payments/sms-webhook` | `{"from":"…","text":"…"}` (aliases + tolerant parse of raw quotes/newlines; plain text also OK) | always `201` — Android forwarder target; optional `X-Webhook-Secret` header (`401` on mismatch when `WEBHOOK_SECRET` is set) |
 | `GET /payments` | — (`?orderId=` optional) | `200` list, newest first |
 | `POST /debug/parse` | `{"smsText":"…"}` | `200` raw `ParsedResult` (dev only) |
 
 Error shape (all errors): `{"timestamp","status","error","message","path"}`.
-`400` validation / bad param / bad image, `404` unknown order, `409` paise
-exhaustion or write race, `413` image over 5 MB.
+`400` validation / bad param / bad image, `401` bad webhook secret, `404`
+unknown order, `409` paise exhaustion or write race, `413` image over 5 MB.
 
 Money is `BigDecimal` (scale 2) end to end; UTR is normalized `""` → `null` and
 unique; every verify attempt is saved as a `payments` audit row, including
@@ -130,13 +204,17 @@ duplicates and races (re-saved as `SUSPICIOUS`).
   password differs — check `docker ps` (Option B) or
   `mysql -uroot -p -e "SELECT 1;"`, then fix `spring.datasource.*`.
 - **`Verification service unavailable` verdict**: `META_API_KEY` missing/invalid
-  or Meta API unreachable. `export META_API_KEY=<key>`, re-check with
-  `python3 test.py`, restart the app.
+  or Meta API unreachable. Re-check with
+  `META_API_KEY=<key-from-us> python3 test.py`, then restart the app with the
+  key inline (see Run above).
 - **`Order expired — 5 min window passed`**: correct behavior — create a new
   order (new unique amount) and pay again. For tests, use the fast-expiry run
   above.
 - **`Duplicate UTR`**: that UTR was already used for a matched payment; each
   payment needs its own UTR.
+- **Test SMS came back `SUSPICIOUS` instead of `VERIFIED`**: your test UTR
+  looks fabricated (sequential or repetitive digits) — use a fresh
+  random-looking 12-digit UTR.
 - **`413 File too large`**: screenshot over 5 MB — compress/resize and retry.
 - **`409 All paise variants in use`**: 99+ `PENDING` orders share one base
   amount — wait for expiry or vary the base amount.
@@ -147,6 +225,15 @@ duplicates and races (re-saved as `SUSPICIOUS`).
 - **Port 8080 already in use**: start on another port —
   `mvn spring-boot:run -Dspring-boot.run.arguments="--server.port=8081"`,
   then open http://localhost:8081 instead.
+- **SMS arrived but no payment row appeared**: phone and laptop must share one
+  network — re-check the laptop IP (`ipconfig getifaddr en0`) and the macro
+  URL; confirm MacroDroid battery is Unrestricted and the app is running with
+  the key inline (see Run above).
+- **macOS blocked the phone's connection**: allow incoming connections for
+  Java when prompted (or Settings → Network → Firewall).
+- **Webhook returns `401`**: you set `WEBHOOK_SECRET` but MacroDroid's
+  `X-Webhook-Secret` header is missing or different — make them match, or
+  unset the env var and restart to leave the endpoint open.
 
 ## Project map
 
@@ -156,7 +243,8 @@ src/main/java/com/example/upigateway/
   UpiGatewayApplication.java             boot + @EnableScheduling
   model/      Order, Payment, OrderStatus, Verdict, ParsedResult
   repo/       OrderRepository, PaymentRepository (UTR unique, earliest-first match)
-  dto/        CreateOrderRequest, OrderResponse, VerifySmsRequest, VerifyPaymentResponse
+  dto/        CreateOrderRequest, OrderResponse, VerifySmsRequest, VerifyPaymentResponse,
+              SmsWebhookRequest (lenient forwarder-body parse)
   service/    OrderService (unique paise + upi:// link), QrService (220px PNG),
               ExpiryService (5-min scheduler), PaymentParser (Muse Spark SMS+vision),
               PaymentService (@Transactional audit + match/settle)
@@ -166,7 +254,7 @@ src/main/java/com/example/upigateway/
 src/main/resources/
   application.properties                 DB, Meta API, expiry, 5MB upload cap
   static/     index.html, app.js, style.css (demo UI, no framework)
-src/test/.../service/PaymentServiceTest.java   fake-parser unit tests (no DB/AI)
+src/test/...   PaymentServiceTest, SmsWebhookRequestTest (no DB/AI, `mvn test`)
 docker-compose.yml  MySQL 8 (Option B)    README_MYSQL.md  DB deep-dive
 PLAN.md         build plan (source of truth)  test.py  API-key probe
 ```

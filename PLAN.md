@@ -271,6 +271,24 @@ curl -s http://localhost:8080/orders | jq
 
 ---
 
+## Step 12 — Android SMS Webhook [x] (live-verified Nov 2: alias/malformed/plain bodies → 201, secret off/on incl. 401s)
+
+**Files to create/change:**
+- `src/main/java/com/example/upigateway/dto/SmsWebhookRequest.java` — `{from, text}` with `@JsonAlias` for forwarder variants (`sender`/`address`/`number`, `message`/`body`/`sms`) + static `lenientParse` (normal JSON first; fallback extracts text between the text-key and the final closing quote with newlines→spaces; last resort treats the whole body as the SMS; null only for a missing body; never throws).
+- `PaymentController` add `POST /payments/sms-webhook` (raw `String` body + optional `X-Webhook-Secret` header) -> 401 on secret mismatch when `webhook.secret` is set, 400 only when no SMS text at all, else delegates to the same `verify()` flow (same 201 + race-loss handling). Envelope sender is informational; the AI extracts the real sender.
+- `src/main/resources/application.properties` — `webhook.secret=${WEBHOOK_SECRET:}` (empty = open endpoint).
+- `src/test/java/com/example/upigateway/dto/SmsWebhookRequestTest.java` — primary/alias deserialization + lenient cases (raw quotes/newlines/backslash, alias+malformed, plain text, missing body).
+
+**What it does:** An Android forwarder app (MacroDroid: SMS Received → HTTP POST) pushes each SMS to `http://<laptop-ip>:8080/payments/sms-webhook` on the same network — no pasting, same AI + match path. Server listens on all interfaces (`*:8080`). MacroDroid inserts the SMS unescaped, so strict JSON binding would 400 on real bank SMS — hence the raw-body + lenient parse (never 400 for malformed JSON).
+
+**How to test:**
+```bash
+curl -s -X POST http://localhost:8080/payments/sms-webhook -H "Content-Type: application/json" -d '{"from":"VM-HDFCBK","text":"Rs.<AMT> credited ... UTR <fresh12> ..."}' | jq
+# expect VERIFIED + matchedOrderId + PAID, same as /payments/verify
+```
+
+---
+
 ## Build Order Summary
 
 1. Skeleton -> 2. Entities+Repos -> 3. Create+UPI -> 4. QR -> 5. Expiry scheduler -> 6. AI parser (SMS) + debug endpoint -> 7. Verify+@Transactional+Audit+UTR+Version+expired-rejection (+repo tweaks) -> 8. Screenshot (after vision spike) -> 9. Read (+repo filters) -> 10. Web (-> 11. Postgres only if time)

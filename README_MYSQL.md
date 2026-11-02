@@ -37,11 +37,10 @@ mysql -uroot -p -e "SHOW DATABASES; USE paymentgateway; SHOW TABLES;"
 
 Or use MySQL Workbench: host=localhost port=3306 user=root db=paymentgateway
 
-## 3. Export the AI key and run the app
+## 3. Run the app (API key inline — no exports needed)
 ```bash
-export META_API_KEY=<your-key>  # required for SMS/screenshot verification
-python3 test.py                 # should list muse-spark-1.3
-mvn spring-boot:run
+META_API_KEY=<key-from-us> python3 test.py   # should list muse-spark-1.3
+META_API_KEY=<key-from-us> mvn spring-boot:run
 ```
 
 You will see SQL in console like:
