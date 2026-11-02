@@ -27,6 +27,7 @@ button {
   color: #fff;
 }
 button:hover { background: #1e40af; }
+button:disabled { opacity: 0.6; cursor: wait; }
 .error { color: #b91c1c; }
 .status-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .countdown { font-variant-numeric: tabular-nums; font-weight: 600; }

@@ -127,52 +127,71 @@ function showVerdict(resp) {
   refreshLists();
 }
 
-$('createForm').addEventListener('submit', async (e) => {
-  e.preventDefault();
-  const err = $('createError');
-  err.hidden = true;
+async function withBusy(form, fn) {
+  const btn = form.querySelector('button[type=submit]');
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = label + '…';
   try {
-    const order = await api('/orders', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        baseAmount: $('baseAmount').value,
-        merchantUpiId: $('merchantUpiId').value.trim()
-      })
-    });
-    showOrder(order);
-  } catch (ex) {
-    err.textContent = ex.message;
-    err.hidden = false;
+    await fn();
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
   }
+}
+
+$('createForm').addEventListener('submit', (e) => {
+  e.preventDefault();
+  withBusy(e.target, async () => {
+    const err = $('createError');
+    err.hidden = true;
+    try {
+      const order = await api('/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          baseAmount: $('baseAmount').value,
+          merchantUpiId: $('merchantUpiId').value.trim()
+        })
+      });
+      showOrder(order);
+    } catch (ex) {
+      err.textContent = ex.message;
+      err.hidden = false;
+    }
+  });
 });
 
-$('verifySmsForm').addEventListener('submit', async (e) => {
+$('verifySmsForm').addEventListener('submit', (e) => {
   e.preventDefault();
-  try {
-    const resp = await api('/payments/verify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ smsText: $('smsText').value })
-    });
-    showVerdict(resp);
-  } catch (ex) {
-    setVerdictBanner(ex.message);
-  }
+  withBusy(e.target, async () => {
+    try {
+      const resp = await api('/payments/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ smsText: $('smsText').value })
+      });
+      showVerdict(resp);
+    } catch (ex) {
+      setVerdictBanner(ex.message);
+    }
+  });
 });
 
-$('verifyImageForm').addEventListener('submit', async (e) => {
+$('verifyImageForm').addEventListener('submit', (e) => {
   e.preventDefault();
-  const file = $('imageFile').files[0];
-  if (!file) return;
-  const form = new FormData();
-  form.append('image', file);
-  try {
-    const resp = await api('/payments/verify-image', { method: 'POST', body: form });
-    showVerdict(resp);
-  } catch (ex) {
-    setVerdictBanner(ex.message);
-  }
+  withBusy(e.target, async () => {
+    const file = $('imageFile').files[0];
+    if (!file) return;
+    const form = new FormData();
+    form.append('image', file);
+    try {
+      const resp = await api('/payments/verify-image', { method: 'POST', body: form });
+      showVerdict(resp);
+    } catch (ex) {
+      setVerdictBanner(ex.message);
+    }
+  });
 });
 
 $('copyLinkBtn').addEventListener('click', async () => {

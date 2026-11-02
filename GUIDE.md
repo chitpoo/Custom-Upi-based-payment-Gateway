@@ -2,9 +2,23 @@
 
 Merchant creates a Rs.100 order → system assigns a unique amount (e.g. Rs.100.37;
 the paise 0.01–0.99 is unused by any `PENDING` order) → UPI link + QR → customer
-pays direct to the merchant UPI (we never hold money) → merchant pastes the bank
-SMS / uploads a screenshot → Muse Spark verifies → amount match flips the order
-`PENDING` → `PAID`. Orders unpaid after 5 minutes become `EXPIRED`.
+pays direct to the merchant UPI (we never hold money) → the bank SMS reaches
+the app (phone auto-forward, paste, or screenshot upload) → Muse Spark
+verifies → amount match flips the order `PENDING` → `PAID`. Orders unpaid
+after 5 minutes become `EXPIRED`.
+
+## How verification works (the idea in 30 seconds)
+
+- Every `PENDING` order owns a unique paise amount (Rs.100 → `100.37`), so an
+  amount identifies exactly one order. The app never touches money — payment
+  goes straight to the merchant's UPI ID.
+- Muse Spark (`muse-spark-1.3`) reads each SMS/screenshot and returns amount,
+  12-digit UTR, sender, direction, and a verdict (`VERIFIED` / `SUSPICIOUS` /
+  `NOT_A_PAYMENT`) — including flagging fabricated-looking UTRs.
+- A `VERIFIED` credit whose amount equals a `PENDING` order flips it to `PAID`;
+  unknown amounts, duplicates (UTR already used), and late arrivals on
+  `EXPIRED` orders are rejected with a reason. Every attempt is saved to the
+  `payments` audit table, matched or not.
 
 ## Prerequisites
 
@@ -105,8 +119,10 @@ Your phone can push each SMS straight to the app — no pasting:
 5. **macOS firewall:** on the first phone attempt the laptop may ask to allow
    incoming connections for Java — click Allow.
 6. **Test:** text yourself any message → a new row appears in Payment History
-   (non-payments land as `NOT_A_PAYMENT`/`SUSPICIOUS`, never matched). Then
-   make the real payment and watch the order flip to `PAID` untouched.
+   (non-payments land as `NOT_A_PAYMENT`/`SUSPICIOUS`, never matched). For a
+   real match, FIRST create the order in the UI, then pay its EXACT unique
+   amount — the forwarded SMS must carry that amount, or it lands as an
+   unmatched audit row. Watch the order flip to `PAID` untouched.
 7. **Optional security:** to stop strangers on the network hitting your
    webhook, pick ANY value you like and put the SAME value in both places:
    prefix the run command with `WEBHOOK_SECRET=<your-value>` and add a header
@@ -176,6 +192,26 @@ chip; orders table and payment history refresh every 5 s. After expiry the UI
 shows *"Payment failed — time expired…"* with a Retry button that pre-fills the
 create form.
 
+## Video script (3 minutes)
+
+- **0:00–0:30 — Problem + idea:** small merchants can't cheaply confirm UPI
+  payments. We assign a unique-paise amount per order and let AI read the
+  bank SMS. Show the UI.
+- **0:30–1:00 — Create:** create a Rs.100 order → unique amount + QR +
+  countdown appear. Scan the QR with the phone (close-up).
+- **1:00–2:00 — Pay + auto-verify (the money shot):** pay the exact amount →
+  bank SMS arrives on the phone → MacroDroid pushes it → Payment History row
+  appears → order flips `PENDING` → `PAID` live. No typing.
+- **2:00–2:30 — Trust signals:** paste an OTP → `NOT_A_PAYMENT`, never
+  matched; upload a screenshot → same verdict panel.
+- **2:30–3:00 — How it works + close:** unique-paise matching + Muse Spark
+  extraction + full audit trail; 5-min expiry with retry; "we never touch
+  the money."
+
+Recording tips: clear both tables first so history starts empty; do one full
+dry run; keep the paste box ready as backup; mention expiry verbally instead
+of waiting on camera; film the phone screen too when the SMS lands.
+
 ## API quick-ref
 
 | Method & path | Body | Success |
@@ -231,6 +267,13 @@ duplicates and races (re-saved as `SUSPICIOUS`).
   the key inline (see Run above).
 - **macOS blocked the phone's connection**: allow incoming connections for
   Java when prompted (or Settings → Network → Firewall).
+- **Row appears but the order stays `PENDING`**: read that row's verdict and
+  reason — it names the exact cause (amount mismatch, flagged UTR, expired
+  order). The SMS must carry the order's EXACT unique amount.
+- **College/public WiFi blocks phone → laptop**: some networks isolate
+  clients from each other. Fallback: turn on the phone's hotspot, join it
+  from the laptop, and use the hotspot IP in the macro (USB tethering works
+  the same way). Paste always works regardless of network.
 - **Webhook returns `401`**: you set `WEBHOOK_SECRET` but MacroDroid's
   `X-Webhook-Secret` header is missing or different — make them match, or
   unset the env var and restart to leave the endpoint open.
