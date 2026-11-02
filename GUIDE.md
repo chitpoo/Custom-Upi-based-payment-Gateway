@@ -4,23 +4,37 @@ Merchant creates a Rs.100 order → system assigns a unique amount (e.g. Rs.100.
 the paise 0.01–0.99 is unused by any `PENDING` order) → UPI link + QR → customer
 pays direct to the merchant UPI (we never hold money) → the bank SMS reaches
 the app (phone auto-forward, paste, or screenshot upload) → Muse Spark
-verifies → amount match flips the order `PENDING` → `PAID`. Orders unpaid
-after 5 minutes become `EXPIRED`.
+verifies → amount match flips the order
+`PENDING` → `PAID`. Orders unpaid after 5 minutes become `EXPIRED`.
 
-## How verification works (the idea in 30 seconds)
 
-- Every `PENDING` order owns a unique paise amount (Rs.100 → `100.37`), so an
-  amount identifies exactly one order. The app never touches money — payment
-  goes straight to the merchant's UPI ID.
-- Muse Spark (`muse-spark-1.3`) reads each SMS/screenshot and returns amount,
-  12-digit UTR, sender, direction, and a verdict (`VERIFIED` / `SUSPICIOUS` /
-  `NOT_A_PAYMENT`) — including flagging fabricated-looking UTRs.
-- A `VERIFIED` credit whose amount equals a `PENDING` order flips it to `PAID`;
-  unknown amounts, duplicates (UTR already used), and late arrivals on
-  `EXPIRED` orders are rejected with a reason. Every attempt is saved to the
-  `payments` audit table, matched or not.
+## Contents
+
+1. [Prerequisites](#prerequisites) · [Setup](#setup) · [Run](#run)
+2. [Demo script](#demo-script-5-minutes): browser, Android auto-SMS, manual fallback, curl
+3. [API quick-ref](#api-quick-ref)
+4. [How it works — technical deep dive](#how-it-works--technical-deep-dive):
+   architecture, flow, lifecycle, data model, unique-amount algorithm,
+   decision engine, AI parser, webhook, concurrency
+5. [Configuration reference](#configuration-reference)
+6. [Testing](#testing)
+7. [Known limitations & roadmap](#known-limitations--roadmap)
+8. [Troubleshooting](#troubleshooting)
+9. [Project map](#project-map)
 
 ## Prerequisites
+
+| Component | Version / note |
+|---|---|
+| OS | macOS, Linux or Windows |
+| Java | JDK 17+ (tested on JDK 23) |
+| Maven | 3.9+ |
+| MySQL | 8.x on port 3306, or Docker Desktop |
+| RAM | 4 GB+ is plenty |
+| AI | Meta Model API key with `muse-spark-1.3` access |
+| Optional | Android phone + MacroDroid (auto SMS), `curl` + `jq` (terminal demo), Node.js (`node --check app.js`) |
+
+Details:
 
 - Java 17+ (`java -version`) and Maven 3.9+ (`mvn -version`) — tested on JDK 23
 - MySQL 8, running locally on port 3306 — or Docker Desktop for the
@@ -109,13 +123,16 @@ Your phone can push each SMS straight to the app — no pasting:
 2. **Install MacroDroid** (Play Store, free) and grant it SMS access when asked.
 3. **Battery:** Android Settings → Apps → MacroDroid → Battery → Unrestricted,
    so Android can't kill it mid-demo.
-4. **Create the macro:** Add Macro → Trigger `SMS Received` (any sender) →
+4. **Create the macro:** Add Macro → Trigger `SMS Received` (any sender,
+   content *Contains* `credited` so only payment SMS are forwarded) →
    Action `HTTP Request`: URL
    `http://<laptop-ip>:8080/payments/sms-webhook` (your IP from step 1),
    method `POST`,
    content type `application/json`, body
    `{"from":"<SMS-number magic text>","text":"<SMS-message magic text>"}`
-   (insert both via the magic-text button). No constraints needed.
+   (insert both via the magic-text button: they appear as `[sms_number]` and
+   `[sms_message]`). No constraints needed. Leave the `…` option menu on
+   Cancel; picking an entry inserts an extra placeholder.
 5. **macOS firewall:** on the first phone attempt the laptop may ask to allow
    incoming connections for Java — click Allow.
 6. **Test:** text yourself any message → a new row appears in Payment History
@@ -192,26 +209,6 @@ chip; orders table and payment history refresh every 5 s. After expiry the UI
 shows *"Payment failed — time expired…"* with a Retry button that pre-fills the
 create form.
 
-## Video script (3 minutes)
-
-- **0:00–0:30 — Problem + idea:** small merchants can't cheaply confirm UPI
-  payments. We assign a unique-paise amount per order and let AI read the
-  bank SMS. Show the UI.
-- **0:30–1:00 — Create:** create a Rs.100 order → unique amount + QR +
-  countdown appear. Scan the QR with the phone (close-up).
-- **1:00–2:00 — Pay + auto-verify (the money shot):** pay the exact amount →
-  bank SMS arrives on the phone → MacroDroid pushes it → Payment History row
-  appears → order flips `PENDING` → `PAID` live. No typing.
-- **2:00–2:30 — Trust signals:** paste an OTP → `NOT_A_PAYMENT`, never
-  matched; upload a screenshot → same verdict panel.
-- **2:30–3:00 — How it works + close:** unique-paise matching + Muse Spark
-  extraction + full audit trail; 5-min expiry with retry; "we never touch
-  the money."
-
-Recording tips: clear both tables first so history starts empty; do one full
-dry run; keep the paste box ready as backup; mention expiry verbally instead
-of waiting on camera; film the phone screen too when the SMS lands.
-
 ## API quick-ref
 
 | Method & path | Body | Success |
@@ -233,6 +230,281 @@ unknown order, `409` paise exhaustion or write race, `413` image over 5 MB.
 Money is `BigDecimal` (scale 2) end to end; UTR is normalized `""` → `null` and
 unique; every verify attempt is saved as a `payments` audit row, including
 duplicates and races (re-saved as `SUSPICIOUS`).
+
+## How it works — technical deep dive
+
+This section explains what happens inside the gateway, from the moment an order
+is created to the moment it is marked `PAID`.
+
+### Architecture
+
+```mermaid
+flowchart TB
+    subgraph Client
+        UI[Web dashboard<br/>static/index.html + app.js]
+        PH[Android phone<br/>MacroDroid]
+    end
+    subgraph App[Spring Boot app :8080]
+        OC[OrderController]
+        PC[PaymentController]
+        DC[DebugController]
+        OS[OrderService]
+        QR[QrService]
+        PS[PaymentService]
+        PP[PaymentParser]
+        EX[ExpiryService]
+        EH[GlobalExceptionHandler]
+    end
+    DB[(MySQL<br/>orders, payments)]
+    AI[Meta Model API<br/>muse-spark-1.3]
+
+    UI -->|REST + polling every 5 s| OC & PC
+    PH -->|POST /payments/sms-webhook| PC
+    OC --> OS & QR
+    PC --> PS
+    DC --> PP
+    PS --> PP -->|HTTPS, JSON mode| AI
+    OS & PS & EX --> DB
+```
+
+| Component | Responsibility |
+|---|---|
+| `OrderController` | Create/list/fetch orders, serve QR PNG |
+| `PaymentController` | Verify SMS, verify screenshot, SMS webhook (secret check + lenient parsing), payment history; catches write races and saves a fallback audit row |
+| `OrderService` | Picks the unique amount, builds the `upi://pay` link |
+| `QrService` | Renders the UPI link as a 220×220 PNG (ZXing) |
+| `PaymentParser` | Calls Muse Spark; turns its JSON into a `ParsedResult`; returns `SUSPICIOUS` instead of throwing on parse/network failures |
+| `PaymentService` | The decision engine: validate → match → settle → audit, inside one transaction |
+| `ExpiryService` | Every 60 s, marks `PENDING` orders older than 5 min as `EXPIRED` |
+| `GlobalExceptionHandler` | Turns every error into the same JSON shape |
+
+### End-to-end flow
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor M as Merchant (browser)
+    participant G as Gateway
+    participant DB as MySQL
+    actor C as Customer
+    participant B as Bank
+    participant P as Phone (MacroDroid)
+    participant AI as Muse Spark
+
+    M->>G: POST /orders {baseAmount:100.00, merchantUpiId}
+    G->>DB: find free paise (1–99) among PENDING orders
+    G->>DB: INSERT order PENDING, uniqueAmount 100.37
+    G-->>M: 201 {id, uniqueAmount, upiLink}
+    M->>G: GET /orders/{id}/qr
+    G-->>M: QR PNG
+    C->>B: Pay ₹100.37 via UPI app
+    B-->>P: SMS "Rs.100.37 credited … UTR 582046139277"
+    P->>G: POST /payments/sms-webhook {"from","text"}
+    G->>G: check X-Webhook-Secret, lenient-parse body
+    G->>AI: system prompt + SMS text
+    AI-->>G: {"amount":"100.37","utr":"582046139277","direction":"credit","verdict":"VERIFIED",...}
+    G->>DB: find PENDING order with amount 100.37 (oldest first)
+    G->>DB: check UTR not used before
+    G->>DB: UPDATE order → PAID, INSERT payment (same transaction)
+    G-->>P: 201 {verdict:VERIFIED, orderStatus:PAID}
+    M->>G: (polling) GET /orders
+    G-->>M: order shows PAID
+```
+
+### Order lifecycle
+
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: POST /orders
+    PENDING --> PAID: verified credit, exact amount, new UTR
+    PENDING --> EXPIRED: ExpiryService (createdAt older than 5 min)
+    PAID --> [*]
+    EXPIRED --> [*]
+```
+
+There is no way back from `PAID` or `EXPIRED`. Once an order expires its amount
+becomes free again for new orders. A late payment for an expired order is
+recorded as `SUSPICIOUS` and linked to the expired order, so the merchant can
+refund or follow up.
+
+### Data model
+
+```mermaid
+erDiagram
+    ORDERS ||--o{ PAYMENTS : "matched by"
+    ORDERS {
+        string id PK "UUID"
+        decimal base_amount "10,2"
+        decimal unique_amount "10,2 - base + paise"
+        string merchant_upi_id "validated pattern"
+        enum status "PENDING | PAID | EXPIRED"
+        instant created_at
+        instant paid_at
+        long version "optimistic lock"
+    }
+    PAYMENTS {
+        string id PK "UUID"
+        string order_id FK "nullable - unmatched attempts"
+        decimal amount "10,2"
+        string utr UK "12-digit bank ref, UNIQUE"
+        string sender
+        enum verdict "VERIFIED | SUSPICIOUS | NOT_A_PAYMENT"
+        string reason "max 1000"
+        string raw_message "max 4000 - SMS text or image descriptor"
+        instant received_at
+    }
+```
+
+- `payments.order_id` is empty for attempts that didn't match any order. They're
+  still stored for auditing.
+- `payments.utr` is `UNIQUE`. One real bank transfer can never settle two orders,
+  even if the same SMS is submitted twice.
+- Tables are created automatically by Hibernate (`ddl-auto=update`). See
+  `README_MYSQL.md` for querying them directly.
+
+### The unique-amount algorithm
+
+```
+createOrder(base, upiId):            # synchronized: one at a time
+    base = round(base, 2)
+    repeat up to 100 times:
+        paise = random(1..99)
+        candidate = base + paise/100
+        if no PENDING order has uniqueAmount == candidate:
+            save order(candidate, PENDING); return it
+    fail with 409 "All paise variants in use"
+```
+
+- Up to **99 orders with the same base amount** can be pending at once. In
+  practice the 5-minute expiry keeps that number small.
+- The customer pays at most ₹0.99 extra. That's a tiny cost for exact matching
+  without fees.
+- `synchronized` stops two requests that arrive at the same moment from picking
+  the same amount.
+
+### The verification decision engine
+
+Each verify request (pasted SMS, webhook SMS or screenshot) goes through
+`PaymentService.matchAndSettle`. Rules are checked top to bottom, and the first
+one that applies decides the outcome. **Every path saves an audit row.**
+
+| # | Condition | Result saved | Order effect |
+|---|---|---|---|
+| 1 | AI verdict is not `VERIFIED`, or no amount found | AI's verdict + reason | none |
+| 2 | Source is SMS and direction is not `credit` | AI's verdict (unmatched) | none |
+| 3 | No `PENDING` order has this amount, but an `EXPIRED` one does | `SUSPICIOUS` — "Order expired — 5 min window passed…" | linked to expired order (stays `EXPIRED`) |
+| 4 | No `PENDING` or `EXPIRED` order has this amount | `VERIFIED`, unmatched | none |
+| 5 | UTR already used by an earlier payment | `SUSPICIOUS` — "Duplicate UTR" (UTR blanked in the audit row) | none |
+| 6 | Otherwise | `VERIFIED` | **oldest matching `PENDING` order → `PAID`** |
+
+Why rule 2 applies only to SMS: the merchant's bank SMS must say money came
+**in**. A customer's screenshot, though, shows money going **out** (a debit from
+their side), so screenshots accept either direction.
+
+### AI parser design (`PaymentParser`)
+
+- **Model:** `muse-spark-1.3` via the OpenAI-compatible `POST {baseUrl}/chat/completions`.
+- **Deterministic output:** `temperature: 0` and `response_format: {"type":"json_object"}`.
+- **Prompt:** asks for `amount, utr, sender, time, direction, verdict, reason`. It
+  tells the model to *judge only the message content; there is no expected
+  amount*, so it can't be nudged into "agreeing" with an order.
+- **Screenshots:** the same fields, sent as a base64 `image_url` data URL to the
+  same model's vision input.
+- **Post-processing:** removes ```` ``` ```` fences if the model adds them, reads the
+  amount as `BigDecimal`, accepts the UTR only if it's exactly 12 digits, and
+  maps unknown verdicts to `SUSPICIOUS`.
+- **Fail closed:** a missing key, timeout (30 s), non-2xx response or unreadable
+  JSON gives `SUSPICIOUS` with "Verification service unavailable". The parser
+  never approves a payment on error.
+- **Debugging:** `POST /debug/parse` returns the raw `ParsedResult` without
+  touching the database.
+
+### SMS webhook internals
+
+MacroDroid pastes the SMS into the JSON body **without escaping it**, so a real
+message with a `"`, a backslash or a line break produces invalid JSON.
+`SmsWebhookRequest.lenientParse` handles this in three tiers:
+
+1. **Strict JSON.** It parses normally. The message can be named `text`,
+   `message`, `body` or `sms`, and the sender `from`, `sender`, `address` or
+   `number`.
+2. **Tolerant extraction.** If strict parsing fails, it takes everything between
+   the `"text":"` key and the final closing quote, and turns line breaks into
+   spaces.
+3. **Plain text.** If neither works, it treats the whole body as the SMS.
+
+The endpoint first checks the `X-Webhook-Secret` header (only when
+`WEBHOOK_SECRET` is set), then parses leniently and passes the text to the
+same verify path as `/payments/verify`. It returns `400` only when there is
+no text at all. The sender (`from`) is
+accepted but not used yet. Only the message text is verified.
+
+### Concurrency & data safety
+
+| Risk | Protection |
+|---|---|
+| Two orders get the same amount | `createOrder` is `synchronized`, and it checks for a pending duplicate before saving |
+| The same SMS submitted twice (retry, double-tap) | `UNIQUE(utr)`; the second attempt is saved as `SUSPICIOUS — Duplicate UTR` |
+| Two SMS race to pay the same order | `@Version` optimistic lock on `Order`; the loser hits `OptimisticLockingFailureException` |
+| A race loser's audit row disappears | The controller catches the conflict and saves a fresh `SUSPICIOUS — Payment already processed` row in a new transaction |
+| A half-finished settle (order PAID, payment missing) | `@Transactional`: the order update and payment insert commit together or not at all |
+| Rounding errors | `BigDecimal` with scale 2 everywhere: DB columns, parsing, comparison |
+| Huge AI reason or SMS breaks the insert | Text is trimmed to the column size (1000 / 4000) before saving |
+| Leaking internal entities | Controllers return DTOs only |
+
+## Configuration reference
+
+All settings live in `src/main/resources/application.properties`. Any of them
+can be overridden at startup with `--key=value`, for example
+`mvn spring-boot:run -Dspring-boot.run.arguments="--app.expiry-minutes=1"`.
+
+| Property | Default | Purpose |
+|---|---|---|
+| `server.port` | `8080` | HTTP port for the API and UI |
+| `spring.datasource.url` | `jdbc:mysql://localhost:3306/paymentgateway?createDatabaseIfNotExist=true…` | DB connection (creates the DB on first run) |
+| `spring.datasource.username` / `password` | `root` / `9599` | DB credentials |
+| `meta.api.key` | `${META_API_KEY:}` (empty default) | Muse Spark API key — **environment variable only** |
+| `meta.api.baseUrl` | `https://api.meta.ai/v1` | Meta Model API base URL |
+| `meta.api.model` | `muse-spark-1.3` | Model used for text and vision |
+| `webhook.secret` | `${WEBHOOK_SECRET:}` (empty = open) | Required `X-Webhook-Secret` value for the SMS webhook |
+| `app.expiry-minutes` | `5` | How long an order stays `PENDING` |
+| `app.expiry-interval-ms` | `60000` (default lives in `ExpiryService` code, not in the properties file) | How often the expiry job runs |
+| `spring.servlet.multipart.max-file-size` | `5MB` | Screenshot upload limit |
+
+| Environment variable | Required? | Used for |
+|---|---|---|
+| `META_API_KEY` | **Yes** (otherwise every verify returns `SUSPICIOUS`) | AI parsing |
+| `WEBHOOK_SECRET` | Optional | Protecting `/payments/sms-webhook` |
+
+## Testing
+
+```bash
+mvn test
+```
+
+The tests use fakes, so they need **no database and no AI key**:
+
+| Test class | What it proves |
+|---|---|
+| `PaymentServiceTest` | A duplicate-UTR audit is saved with the UTR blanked, so `UNIQUE(utr)` holds; a **debit SMS never settles** an order, but a debit **screenshot** does |
+| `SmsWebhookRequestTest` | The webhook accepts normal and alias field names, an optional sender, valid JSON, **raw quotes/newlines/backslashes**, alias keys with raw content, and plain-text bodies, and returns `null` for an empty body |
+
+The manual end-to-end checks (create, pay, verify, expire, duplicate) are in the
+demo script above.
+
+## Known limitations & roadmap
+
+Each limitation below has a known fix:
+
+| Limitation | Why it matters | Planned fix |
+|---|---|---|
+| The AI verdict is the only authenticity check | An SMS crafted to look genuine could be marked `VERIFIED` | Add rule checks: amount must appear in the raw text, sender must be a bank sender ID, UTR format |
+| Screenshots can settle an order | Screenshots can be edited | Treat screenshot verdicts as "needs review"; settle only from bank SMS |
+| Single merchant / no auth | Anyone who can reach the server can create orders | Per-merchant API keys; match verify requests by merchant |
+| An expired amount is reused right away | A late payment could match a *new* order with the same amount | Cooldown before a freed amount can be assigned again |
+| Runs on a laptop + local network | The phone must share a network with the laptop | Cloud deployment with a public HTTPS webhook |
+| UPI link has no payee name (`pn=`) | Some UPI apps show a warning | Add a merchant display name to the link |
+
 
 ## Troubleshooting
 
